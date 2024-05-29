@@ -1,3 +1,6 @@
+#  Copyright (c) 2024. IPCRC, Lab. Jiangnig Wei
+#  All rights reserved
+
 # Sparsely-Gated Mixture-of-Experts Layers.
 # See "Outrageously Large Neural Networks"
 # https://arxiv.org/abs/1701.06538
@@ -15,11 +18,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .parallel_experts import ParallelExperts
+from parallel_experts import ParallelExperts
 
 
 class MoE(nn.Module):
-
     """Call a Sparsely gated mixture of experts layer with 1-layer Feed-Forward networks as experts.
     Args:
     input_size: integer - size of the input
@@ -30,7 +32,8 @@ class MoE(nn.Module):
     k: an integer - how many experts to use for each batch element
     """
 
-    def __init__(self, input_size, head_size, num_experts, k, cvloss=0, switchloss=0, zloss=0, bias=False, activation=None, noisy_gating=True):
+    def __init__(self, input_size, head_size, num_experts, k, cvloss=0, switchloss=0, zloss=0, bias=False,
+                 activation=None, noisy_gating=True):
         super(MoE, self).__init__()
         self.noisy_gating = noisy_gating
         self.num_experts = num_experts
@@ -63,14 +66,14 @@ class MoE(nn.Module):
 
         if x.shape[0] == 1:
             return 0
-        return x.float().var() / (x.float().mean()**2 + eps)
+        return x.float().var() / (x.float().mean() ** 2 + eps)
 
     def compute_cvloss(self, probs):
         return self.cv_squared(F.normalize(probs.sum(0), p=1, dim=0))
 
     def compute_switchloss(self, probs, freqs):
         loss = F.normalize(probs.sum(0), p=1, dim=0) * \
-            F.normalize(freqs.float(), p=1, dim=0)
+               F.normalize(freqs.float(), p=1, dim=0)
         return loss.sum() * self.num_experts
 
     def compute_zloss(self, logits):
@@ -88,7 +91,7 @@ class MoE(nn.Module):
             gates: a Tensor with shape [batch_size, num_experts]
             load: a Tensor with shape [num_experts]
         """
-        clean_logits = x @ self.w_gate
+        clean_logits = x @ self.w_gate  # B, E
         if self.noisy_gating and self.training:
             raw_noise_stddev = x @ self.w_noise
             noise_stddev = ((F.softplus(raw_noise_stddev) + noise_epsilon))
@@ -120,35 +123,35 @@ class MoE(nn.Module):
             top_k_gates = torch.gather(probs, 1, top_k_indices)
         else:
             top_k_gates, top_k_indices = probs.topk(self.k, dim=1)
-            
+
         # top_k_gates = top_k_gates / \
         #     (top_k_gates.sum(dim=1, keepdim=True) + 1e-6).detach()
-        
+
         zeros = torch.zeros_like(probs, requires_grad=True)
         gates = zeros.scatter(1, top_k_indices, top_k_gates)
         self.expert_size = (gates > 0).long().sum(0)
 
         top_k_gates = top_k_gates.flatten()
         top_k_experts = top_k_indices.flatten()
-        
+
         nonzeros = top_k_gates.nonzero().squeeze(-1)
         top_k_experts_nonzero = top_k_experts[nonzeros]
 
         _, _index_sorted_experts = top_k_experts_nonzero.sort(0)
         self.index_sorted_experts = nonzeros[_index_sorted_experts]
-        self.batch_index = self.index_sorted_experts.div(self.k, rounding_mode='trunc') 
+        self.batch_index = self.index_sorted_experts.div(self.k, rounding_mode='trunc')
         self.batch_gates = top_k_gates[self.index_sorted_experts]
 
         loss = 0
         loss += self.cvloss * self.compute_cvloss(gates)
         loss += self.switchloss * \
-            self.compute_switchloss(probs, self.expert_size)
+                self.compute_switchloss(probs, self.expert_size)
         loss += self.zloss * self.compute_zloss(logits)
         return loss
 
     def forward(self, x, skip_mask=None, sample_topk=0, multiply_by_gates=True):
-        bsz, length, emb_size = x.size()
-        x = x.reshape(-1, emb_size)
+        bsz, length, emb_size = x.size()  # B L C
+        x = x.reshape(-1, emb_size)  # B*L C
         if skip_mask is not None:
             skip_mask = skip_mask.view(-1, 1)
         loss = self.top_k_gating(x, skip_mask, sample_topk=sample_topk)
@@ -161,8 +164,8 @@ class MoE(nn.Module):
         if multiply_by_gates:
             expert_outputs = expert_outputs * self.batch_gates[:, None]
 
-        zeros = torch.zeros((bsz * length, self.input_size), 
-            dtype=expert_outputs.dtype, device=expert_outputs.device)
+        zeros = torch.zeros((bsz * length, self.input_size),
+                            dtype=expert_outputs.dtype, device=expert_outputs.device)
         y = zeros.index_add(0, self.batch_index, expert_outputs)
         y = y.view(bsz, length, self.input_size)
 
@@ -188,8 +191,8 @@ class MoE(nn.Module):
         expert_inputs = x[self.batch_index]
         expert_outputs = self.experts(expert_inputs, self.expert_size)
 
-        zeros = torch.zeros((bsz * length * self.k, self.head_size), 
-            dtype=expert_outputs.dtype, device=expert_outputs.device)
+        zeros = torch.zeros((bsz * length * self.k, self.head_size),
+                            dtype=expert_outputs.dtype, device=expert_outputs.device)
         y = zeros.index_add(0, self.index_sorted_experts, expert_outputs)
         y = y.view(bsz, length, self.k, -1)
         return y, loss
@@ -204,8 +207,15 @@ class MoE(nn.Module):
         if multiply_by_gates:
             expert_outputs = expert_outputs * self.batch_gates[:, None]
 
-        zeros = torch.zeros((bsz * length, self.input_size), 
-            dtype=expert_outputs.dtype, device=expert_outputs.device)
+        zeros = torch.zeros((bsz * length, self.input_size),
+                            dtype=expert_outputs.dtype, device=expert_outputs.device)
         y = zeros.index_add(0, self.batch_index, expert_outputs)
         y = y.view(bsz, length, self.input_size)
         return y
+
+
+if __name__ == '__main__':
+    m = MoE(input_size=12, head_size=4, k=2, num_experts=3, activation=nn.ReLU())
+    x = torch.randn((5, 10, 12))  # B L C
+    # x = m.map(x)
+    x = m(x)
