@@ -129,7 +129,7 @@ class MoE(nn.Module):
 
         zeros = torch.zeros_like(probs, requires_grad=True)
         gates = zeros.scatter(1, top_k_indices, top_k_gates)
-        self.expert_size = (gates > 0).long().sum(0)
+        self.exper_size = (gates > 0).long().sum(0)
 
         top_k_gates = top_k_gates.flatten()
         top_k_experts = top_k_indices.flatten()
